@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.9.16
+
+- Stability improvements when using Numba-compiled functions.
+- Parallelized batch normalization.
+
 ## 0.9.15
 
 - Stability improvements when loading files and generating thumbnails (specfically for tiff & pakon files).
