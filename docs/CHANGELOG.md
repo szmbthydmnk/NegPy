@@ -13,7 +13,7 @@
     - History survives app restarts and file switching.
     - Track number of edits on image overlay (lower left corner)
       - Also track number of heal spots in retouch toolbar section.
-- Packaged some additional requirements in Linux appimage for easier running on debian-derived distros.
+- Packaged some additional requirements in Linux appimage for easier (I hope) running on debian-derived distros.
 - **Fixed(?) UI rendering issues on Windows**
 
 NOTE: due to some backend changes in storing the edits you might get weird colors on your previously edited photos. Reset should get rid of that. Nuclear option is deleting `edits.db` and `settings.db` from NegPy folder in your Documents.
