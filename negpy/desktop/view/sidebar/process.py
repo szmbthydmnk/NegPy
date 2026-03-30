@@ -26,13 +26,8 @@ class ProcessSidebar(BaseSidebar):
         self.mode_combo.setCurrentText(conf.process_mode)
         self.layout.addWidget(self.mode_combo)
 
-        sliders_row = QHBoxLayout()
         self.analysis_buffer_slider = CompactSlider("Analysis Buffer", 0.0, 0.25, conf.analysis_buffer)
-        self.shadow_cast_strength_slider = CompactSlider("Cast removal", 0.0, 1.0, conf.shadow_cast_strength)
-
-        sliders_row.addWidget(self.analysis_buffer_slider)
-        sliders_row.addWidget(self.shadow_cast_strength_slider)
-        self.layout.addLayout(sliders_row)
+        self.layout.addWidget(self.analysis_buffer_slider)
 
         wp_bp_row = QHBoxLayout()
         self.white_point_slider = CompactSlider("White Point", -0.5, 0.5, conf.white_point_offset, has_neutral=True)
@@ -91,9 +86,6 @@ class ProcessSidebar(BaseSidebar):
         self.analysis_buffer_slider.valueChanged.connect(lambda v: self._on_buffer_changed(v, persist=False))
         self.analysis_buffer_slider.valueCommitted.connect(lambda v: self._on_buffer_changed(v, persist=True))
 
-        self.shadow_cast_strength_slider.valueChanged.connect(lambda v: self._on_shadow_cast_strength_changed(v, persist=False))
-        self.shadow_cast_strength_slider.valueCommitted.connect(lambda v: self._on_shadow_cast_strength_changed(v, persist=True))
-
         self.white_point_slider.valueChanged.connect(lambda v: self._on_white_point_changed(v, persist=False))
         self.white_point_slider.valueCommitted.connect(lambda v: self._on_white_point_changed(v, persist=True))
 
@@ -107,9 +99,7 @@ class ProcessSidebar(BaseSidebar):
         self.load_roll_btn.clicked.connect(self._on_load_roll)
         self.save_roll_btn.clicked.connect(self._on_save_roll)
         self.delete_roll_btn.clicked.connect(self._on_delete_roll)
-
-    def _on_shadow_cast_strength_changed(self, val: float, persist: bool = True) -> None:
-        self.update_config_section("process", shadow_cast_strength=val, persist=persist)
+        self.sync_ui()
 
     def _on_white_point_changed(self, val: float, persist: bool = True) -> None:
         self.update_config_section("process", white_point_offset=val, persist=persist)
@@ -123,9 +113,7 @@ class ProcessSidebar(BaseSidebar):
             process_mode=mode,
             render=True,
             persist=True,
-            local_floors=(0.0, 0.0, 0.0),
             local_ceils=(0.0, 0.0, 0.0),
-            local_shadow_cast=(0.0, 0.0, 0.0),
         )
         self.sync_ui()
 
@@ -137,13 +125,9 @@ class ProcessSidebar(BaseSidebar):
             persist=True,
             local_floors=(0.0, 0.0, 0.0),
             local_ceils=(0.0, 0.0, 0.0),
-            local_shadow_cast=(0.0, 0.0, 0.0),
         )
 
     def _on_buffer_changed(self, val: float, persist: bool = True) -> None:
-        """
-        Updates analysis buffer and forces local re-analysis.
-        """
         self.update_config_section(
             "process",
             persist=persist,
@@ -219,7 +203,6 @@ class ProcessSidebar(BaseSidebar):
         try:
             self.mode_combo.setCurrentText(conf.process_mode)
             self.analysis_buffer_slider.setValue(conf.analysis_buffer)
-            self.shadow_cast_strength_slider.setValue(conf.shadow_cast_strength)
             self.white_point_slider.setValue(conf.white_point_offset)
             self.black_point_slider.setValue(conf.black_point_offset)
 
@@ -241,7 +224,6 @@ class ProcessSidebar(BaseSidebar):
         widgets = [
             self.mode_combo,
             self.analysis_buffer_slider,
-            self.shadow_cast_strength_slider,
             self.white_point_slider,
             self.black_point_slider,
             self.normalize_e6_btn,

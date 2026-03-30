@@ -1,5 +1,7 @@
 import unittest
+
 import numpy as np
+
 from negpy.features.exposure.logic import (
     apply_characteristic_curve,
     cmy_to_density,
@@ -29,15 +31,13 @@ class TestExposureLogic(unittest.TestCase):
         res2 = apply_characteristic_curve(img, (0.6, 2.0), (0.6, 2.0), (0.6, 2.0))
 
         # Higher pivot -> lower diff -> lower density -> higher transmittance
-        self.assertGreater(np.mean(res2), np.mean(res1))
+        self.assertGreater(float(np.mean(res2)), float(np.mean(res1)))
 
     def test_cmy_conversions(self):
         """Verify unit conversion roundtrip."""
         val = 0.5
         dens = cmy_to_density(val, log_range=1.0)
-        # cmy_max_density is 0.2 (from models.py)
-        # dens = 0.5 * 0.2 / 1.0 = 0.1
-        self.assertEqual(dens, 0.1)
+        self.assertEqual(dens, 0.075)
 
         val_back = density_to_cmy(dens, log_range=1.0)
         self.assertAlmostEqual(val, val_back)
@@ -55,18 +55,22 @@ class TestExposureLogic(unittest.TestCase):
         self.assertGreater(dm, 0)
         self.assertLess(dy, 0)
 
-    def test_shadows_highlights_direction(self):
-        """Verify that positive shadows/highlights values brighten the image."""
+    def test_toe_shoulder_direction(self):
+        """Verify that positive toe/shoulder values brighten the image (hybrid lift/recovery)."""
         img = np.full((10, 10, 3), 0.5, dtype=np.float32)
         params = (0.5, 1.0)
 
         res_neutral = apply_characteristic_curve(img, params, params, params)
-        res_shadows = apply_characteristic_curve(img, params, params, params, shadows=1.0)
-        res_highlights = apply_characteristic_curve(img, params, params, params, highlights=1.0)
+        res_toe = apply_characteristic_curve(img, params, params, params, toe=1.0)
+        res_shoulder = apply_characteristic_curve(img, params, params, params, shoulder=1.0)
 
-        # Positive values should brighten (higher transmittance)
-        self.assertGreater(np.mean(res_shadows), np.mean(res_neutral))
-        self.assertGreater(np.mean(res_highlights), np.mean(res_neutral))
+        # Positive toe lifts shadows -> brighter
+        # Positive shoulder recovers highlights -> darker (in positive sense, but here it shifts exposure)
+        # Wait, if shoulder > 0 it increases density (recovers highlights), so it should be DARKER.
+        # If toe > 0 it decreases density (lifts shadows), so it should be BRIGHTER.
+
+        self.assertGreater(float(np.mean(res_toe)), float(np.mean(res_neutral)))
+        self.assertLess(float(np.mean(res_shoulder)), float(np.mean(res_neutral)))
 
     def test_regional_cmy(self):
         """Verify that regional CMY affects the output."""
@@ -78,8 +82,8 @@ class TestExposureLogic(unittest.TestCase):
         # R = R_dens + offset. Transmittance = 10^-R. So more cyan -> lower R transmittance.
         res_shadow_cyan = apply_characteristic_curve(img, params, params, params, shadow_cmy=(1.0, 0.0, 0.0))
 
-        self.assertLess(res_shadow_cyan[0, 0, 0], res_neutral[0, 0, 0])
-        self.assertAlmostEqual(res_shadow_cyan[0, 0, 1], res_neutral[0, 0, 1], places=5)
+        self.assertLess(float(res_shadow_cyan[0, 0, 0]), float(res_neutral[0, 0, 0]))
+        self.assertAlmostEqual(float(res_shadow_cyan[0, 0, 1]), float(res_neutral[0, 0, 1]), places=5)
 
 
 if __name__ == "__main__":

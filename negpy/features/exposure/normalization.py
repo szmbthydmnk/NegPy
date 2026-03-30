@@ -1,9 +1,11 @@
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
 import numpy as np
 from numba import njit  # type: ignore
+
 from negpy.domain.types import ImageBuffer
-from negpy.kernel.image.validation import ensure_image
 from negpy.features.process.models import ProcessMode
+from negpy.kernel.image.validation import ensure_image
 
 
 @njit(cache=True, fastmath=True)
@@ -96,25 +98,38 @@ def analyze_log_exposure_bounds(
     if analysis_buffer > 0:
         img_log = get_analysis_crop(img_log, analysis_buffer)
 
-    p_low, p_high = 0.5, 99.5
+    p_low, p_high = 0.001, 99.999
     fixed_range = 3.0
 
     if process_mode == ProcessMode.E6:
-        p_low, p_high = 99.9, 0.01
+        p_low, p_high = 99.999, 0.001
         fixed_range = -3.0
 
+    mean_log = np.mean(img_log, axis=-1)
+
+    dark_threshold = np.percentile(mean_log, p_low)
+    if process_mode == ProcessMode.E6:
+        dark_mask = mean_log >= dark_threshold
+    else:
+        dark_mask = mean_log <= dark_threshold
+
     floors = []
+    if np.any(dark_mask):
+        dark_pixels = img_log[dark_mask]
+        for ch in range(3):
+            floors.append(float(np.mean(dark_pixels[:, ch])))
+    else:
+        for ch in range(3):
+            floors.append(float(np.percentile(img_log[:, :, ch], p_low)))
+
     ceils = []
     for ch in range(3):
         data = img_log[:, :, ch]
-        f = np.percentile(data, p_low)
-        floors.append(float(f))
-
         if process_mode != ProcessMode.E6 or e6_normalize:
             c = np.percentile(data, p_high)
             ceils.append(float(c))
         else:
-            ceils.append(float(f + fixed_range))
+            ceils.append(float(floors[ch] + fixed_range))
 
     return LogNegativeBounds(
         (floors[0], floors[1], floors[2]),

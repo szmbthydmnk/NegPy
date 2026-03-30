@@ -1,16 +1,16 @@
 import numpy as np
+
 from negpy.domain.interfaces import PipelineContext
 from negpy.domain.types import ImageBuffer
-from negpy.features.exposure.models import ExposureConfig, EXPOSURE_CONSTANTS
-from negpy.features.process.models import ProcessConfig, ProcessMode
 from negpy.features.exposure.logic import apply_characteristic_curve
-from negpy.kernel.image.logic import get_luminance
+from negpy.features.exposure.models import EXPOSURE_CONSTANTS, ExposureConfig
 from negpy.features.exposure.normalization import (
-    normalize_log_image,
-    analyze_log_exposure_bounds,
     LogNegativeBounds,
+    analyze_log_exposure_bounds,
+    normalize_log_image,
 )
-from negpy.features.exposure.shadows import analyze_shadow_cast, apply_shadow_cast_correction
+from negpy.features.process.models import ProcessConfig, ProcessMode
+from negpy.kernel.image.logic import get_luminance
 
 
 class NormalizationProcessor:
@@ -79,19 +79,7 @@ class NormalizationProcessor:
 
         res = normalize_log_image(img_log, bounds)
 
-        cast = (0.0, 0.0, 0.0)
-        if self.config.shadow_cast_strength > 0:
-            if self.config.use_roll_average:
-                cast = self.config.locked_shadow_cast
-            elif any(v != 0.0 for v in self.config.local_shadow_cast):
-                cast = self.config.local_shadow_cast
-            else:
-                cast = analyze_shadow_cast(res, self.config.shadow_cast_threshold)
-
-            res = apply_shadow_cast_correction(res, cast, self.config.shadow_cast_strength)
-
         context.metrics["normalized_log"] = res
-        context.metrics["shadow_cast"] = cast
         return res
 
 
@@ -105,7 +93,7 @@ class PhotometricProcessor:
 
     def process(self, image: ImageBuffer, context: PipelineContext) -> ImageBuffer:
         master_ref = 1.0
-        exposure_shift = 0.1 + (self.config.density * EXPOSURE_CONSTANTS["density_multiplier"])
+        exposure_shift = 0.01 + (self.config.density * EXPOSURE_CONSTANTS["density_multiplier"])
         slope = 1.0 + (self.config.grade * EXPOSURE_CONSTANTS["grade_multiplier"])
 
         pivots = [master_ref - exposure_shift] * 3
@@ -140,12 +128,8 @@ class PhotometricProcessor:
             params_b=(pivots[2], slope),
             toe=self.config.toe,
             toe_width=self.config.toe_width,
-            toe_hardness=self.config.toe_hardness,
             shoulder=self.config.shoulder,
             shoulder_width=self.config.shoulder_width,
-            shoulder_hardness=self.config.shoulder_hardness,
-            shadows=self.config.shadows,
-            highlights=self.config.highlights,
             shadow_cmy=shadow_cmy,
             highlight_cmy=highlight_cmy,
             cmy_offsets=cmy_offsets,

@@ -1,6 +1,8 @@
+from typing import Any, Tuple
+
 import numpy as np
 from numba import njit  # type: ignore
-from typing import Tuple, Any
+
 from negpy.domain.types import ImageBuffer
 from negpy.kernel.image.validation import ensure_image
 
@@ -31,12 +33,8 @@ def _apply_photometric_fused_kernel(
     slopes: np.ndarray,
     toe: float,
     toe_width: float,
-    toe_hardness: float,
     shoulder: float,
     shoulder_width: float,
-    shoulder_hardness: float,
-    shadows: float,
-    highlights: float,
     cmy_offsets: np.ndarray,
     shadow_cmy: np.ndarray,
     highlight_cmy: np.ndarray,
@@ -45,8 +43,7 @@ def _apply_photometric_fused_kernel(
     mode: int = 0,
 ) -> np.ndarray:
     """
-    Fused JIT kernel for H&D curve application.
-    Maps log-exposure to optical density (D) in a single pass.
+    Fused JIT kernel for H&D curve application with hybrid toe/shoulder control.
     """
     h, w, c = img.shape
     res = np.empty_like(img)
@@ -59,28 +56,24 @@ def _apply_photometric_fused_kernel(
                 diff = val - pivots[ch]
                 epsilon = 1e-6
 
-                s_center = (1.0 - pivots[ch]) * 0.9
-                h_center = (0.0 - pivots[ch]) * 0.9
+                # Toe Mask (Shadows): Active at high diff (Positive/Dense in negative space)
+                t_val = toe_width * (diff / max(1.0 - float(pivots[ch]), epsilon) - 0.5)
+                toe_mask = _fast_sigmoid(t_val)
 
-                s_mask = np.exp(-((diff - s_center) ** 2) / 0.15)
-                shadow_density_offset = shadows * s_mask * 0.3
-                shadow_color_offset = shadow_cmy[ch] * s_mask
+                # Shoulder Mask (Highlights): Active at low diff (Negative/Thin in negative space)
+                s_val = -shoulder_width * (diff / max(float(pivots[ch]), epsilon) + 0.5)
+                shoulder_mask = _fast_sigmoid(s_val)
 
-                h_mask = np.exp(-((diff - h_center) ** 2) / 0.15)
-                highlight_density_offset = highlights * h_mask * 0.3
-                highlight_color_offset = highlight_cmy[ch] * h_mask
+                toe_density_offset = toe * toe_mask * 0.1
+                shoulder_density_offset = shoulder * shoulder_mask * 0.1
 
-                diff_adj = diff + shadow_color_offset + highlight_color_offset - shadow_density_offset - highlight_density_offset
+                shadow_color_offset = shadow_cmy[ch] * toe_mask
+                highlight_color_offset = highlight_cmy[ch] * shoulder_mask
 
-                sw_val = shoulder_width * (diff_adj / max(float(pivots[ch]), epsilon))
-                w_s = _fast_sigmoid(sw_val)
-                prot_s = (4.0 * ((w_s - 0.5) ** 2)) ** shoulder_hardness
-                damp_shoulder = shoulder * (1.0 - w_s) * prot_s
+                diff_adj = diff + shadow_color_offset + highlight_color_offset - toe_density_offset + shoulder_density_offset
 
-                tw_val = toe_width * (diff_adj / max(1.0 - float(pivots[ch]), epsilon))
-                w_t = _fast_sigmoid(tw_val)
-                prot_t = (4.0 * ((w_t - 0.5) ** 2)) ** toe_hardness
-                damp_toe = toe * w_t * prot_t
+                damp_toe = toe * toe_mask * 0.5
+                damp_shoulder = shoulder * shoulder_mask * 0.5
 
                 k_mod = 1.0 - damp_toe - damp_shoulder
                 if k_mod < 0.1:
@@ -105,8 +98,7 @@ def _apply_photometric_fused_kernel(
 
 class LogisticSigmoid:
     """
-    Sigmoid approximation of the H&D curve (Linear + Toe + Shoulder).
-    D = L / (1 + exp(-k * (x - x0)))
+    Sigmoid approximation of the H&D curve with hybrid toe/shoulder.
     """
 
     def __init__(
@@ -116,12 +108,8 @@ class LogisticSigmoid:
         d_max: float = 4.0,
         toe: float = 0.0,
         toe_width: float = 3.0,
-        toe_hardness: float = 1.0,
         shoulder: float = 0.0,
         shoulder_width: float = 3.0,
-        shoulder_hardness: float = 1.0,
-        shadows: float = 0.0,
-        highlights: float = 0.0,
         shadow_cmy: tuple[float, float, float] = (0.0, 0.0, 0.0),
         highlight_cmy: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
@@ -130,47 +118,31 @@ class LogisticSigmoid:
         self.L = d_max
         self.toe = toe
         self.toe_width = toe_width
-        self.toe_hardness = toe_hardness
         self.shoulder = shoulder
         self.shoulder_width = shoulder_width
-        self.shoulder_hardness = shoulder_hardness
-        self.shadows = shadows
-        self.highlights = highlights
         self.shadow_cmy = shadow_cmy
         self.highlight_cmy = highlight_cmy
 
     def __call__(self, x: ImageBuffer) -> ImageBuffer:
-        # Simplified call for plotting/UI (assumes single channel logic if needed,
-        # but here we follow the RGB structure for consistency)
         diff = x - self.x0
         epsilon = 1e-6
 
-        s_center = (1.0 - self.x0) * 0.9
-        h_center = (0.0 - self.x0) * 0.9
+        t_val = self.toe_width * (diff / max(1.0 - self.x0, epsilon) - 0.5)
+        toe_mask = _expit(t_val)
 
-        s_mask = np.exp(-((diff - s_center) ** 2) / 0.15)
-        shadow_density_offset = self.shadows * s_mask * 0.3
+        s_val = -self.shoulder_width * (diff / max(self.x0, epsilon) + 0.5)
+        shoulder_mask = _expit(s_val)
 
-        h_mask = np.exp(-((diff - h_center) ** 2) / 0.15)
-        highlight_density_offset = self.highlights * h_mask * 0.3
+        toe_density_offset = self.toe * toe_mask * 0.3
+        shoulder_density_offset = self.shoulder * shoulder_mask * 0.3
 
-        # Note: LogisticSigmoid.__call__ is often used for the curve plot (luminance)
-        # so we don't apply color offsets here as they are channel-specific.
-        diff_adj = diff - shadow_density_offset - highlight_density_offset
+        diff_adj = diff - toe_density_offset + shoulder_density_offset
 
-        w_s = _expit(self.shoulder_width * (diff_adj / max(self.x0, epsilon)))
-        prot_s = (4.0 * ((w_s - 0.5) ** 2)) ** self.shoulder_hardness
-        damp_shoulder = self.shoulder * (1.0 - w_s) * prot_s
-
-        w_t = _expit(self.toe_width * (diff_adj / max(1.0 - self.x0, epsilon)))
-        prot_t = (4.0 * ((w_t - 0.5) ** 2)) ** self.toe_hardness
-        damp_toe = self.toe * w_t * prot_t
-
-        k_mod = 1.0 - damp_toe - damp_shoulder
+        k_mod = 1.0 - (self.toe * toe_mask) - (self.shoulder * shoulder_mask)
         k_mod = np.clip(k_mod, 0.1, 2.0)
 
-        val = self.k * diff_adj
-        res = self.L * _expit(val * k_mod)
+        val = self.k * diff_adj * k_mod
+        res = self.L * _expit(val)
         return ensure_image(res)
 
 
@@ -181,12 +153,8 @@ def apply_characteristic_curve(
     params_b: Tuple[float, float],
     toe: float = 0.0,
     toe_width: float = 3.0,
-    toe_hardness: float = 1.0,
     shoulder: float = 0.0,
     shoulder_width: float = 3.0,
-    shoulder_hardness: float = 1.0,
-    shadows: float = 0.0,
-    highlights: float = 0.0,
     shadow_cmy: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     highlight_cmy: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     cmy_offsets: Tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -207,12 +175,8 @@ def apply_characteristic_curve(
         slopes,
         float(toe),
         float(toe_width),
-        float(toe_hardness),
         float(shoulder),
         float(shoulder_width),
-        float(shoulder_hardness),
-        float(shadows),
-        float(highlights),
         offsets,
         s_cmy,
         h_cmy,

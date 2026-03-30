@@ -1,5 +1,16 @@
 # Change Log
 
+## 0.11.0
+
+- Improved normalization/autoexposure.
+  - More dynamic range.
+  - More neutral defaults.
+  - Improved batch analysis (more aggressive outlier detection).
+- Streamlined controls
+  - Combined shadows+toe & highlights+shoulder sliders
+- Added glow & halation effects sliders to Lab section.
+
+
 ## 0.10.1
 
 - Optimized database writes to prevent stuttering during active slider movement.

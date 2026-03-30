@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from typing import Optional
+
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+
 from negpy.domain.models import WorkspaceConfig
-from negpy.services.rendering.image_processor import ImageProcessor
 from negpy.kernel.system.config import APP_CONFIG, DEFAULT_WORKSPACE_CONFIG
 from negpy.kernel.system.logging import get_logger
+from negpy.services.rendering.image_processor import ImageProcessor
 
 logger = get_logger(__name__)
 
@@ -135,6 +137,7 @@ class ThumbnailWorker(QObject):
         Generates thumbnails for a list of files with progress reporting.
         """
         import asyncio
+
         from negpy.services.assets import thumbnails as thumb_service
 
         try:
@@ -181,6 +184,7 @@ class AssetDiscoveryWorker(QObject):
         Scans paths for supported images and calculates hashes.
         """
         import os
+
         from negpy.kernel.image.logic import calculate_file_hash
 
         discovered_paths = []
@@ -220,7 +224,7 @@ class NormalizationWorker(QObject):
     """
 
     progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(tuple, tuple, tuple)
+    finished = pyqtSignal(tuple, tuple)
     error = pyqtSignal(str)
 
     def __init__(self, preview_service, repo) -> None:
@@ -234,9 +238,10 @@ class NormalizationWorker(QObject):
         Executes analysis on a batch of files using parallel workers.
         """
         import asyncio
+
         import numpy as np
-        from negpy.features.exposure.normalization import analyze_log_exposure_bounds, normalize_log_image
-        from negpy.features.exposure.shadows import analyze_shadow_cast
+
+        from negpy.features.exposure.normalization import analyze_log_exposure_bounds
 
         total = len(task.files)
         limit = max(1, APP_CONFIG.max_workers // 2)
@@ -252,9 +257,6 @@ class NormalizationWorker(QObject):
                     analysis_buffer = params.process.analysis_buffer if params else DEFAULT_WORKSPACE_CONFIG.process.analysis_buffer
                     process_mode = params.process.process_mode if params else DEFAULT_WORKSPACE_CONFIG.process.process_mode
                     e6_normalize = params.process.e6_normalize if params else DEFAULT_WORKSPACE_CONFIG.process.e6_normalize
-                    shadow_threshold = (
-                        params.process.shadow_cast_threshold if params else DEFAULT_WORKSPACE_CONFIG.process.shadow_cast_threshold
-                    )
 
                     # Use to_thread for blocking CPU/IO bound load and analysis
                     raw, _, _ = await asyncio.to_thread(
@@ -272,15 +274,9 @@ class NormalizationWorker(QObject):
                         e6_normalize=e6_normalize,
                     )
 
-                    # Calculate cast from normalized log data
-                    epsilon = 1e-6
-                    img_log = np.log10(np.clip(raw, epsilon, 1.0))
-                    res_norm = normalize_log_image(img_log, bounds)
-                    cast = analyze_shadow_cast(res_norm, shadow_threshold)
-
                     completed += 1
                     self.progress.emit(completed, total, f_info["name"])
-                    return bounds.floors, bounds.ceils, cast
+                    return bounds.floors, bounds.ceils
                 except Exception as e:
                     logger.error(f"Failed to analyze {f_info['name']}: {e}")
                     return None
@@ -301,7 +297,6 @@ class NormalizationWorker(QObject):
 
             floors_arr = np.array([r[0] for r in valid_results])
             ceils_arr = np.array([r[1] for r in valid_results])
-            casts_arr = np.array([r[2] for r in valid_results])
 
             def get_robust_mean(data: np.ndarray) -> np.ndarray:
                 results = []
@@ -311,7 +306,7 @@ class NormalizationWorker(QObject):
                         results.append(np.mean(ch_data))
                         continue
 
-                    low, high = np.percentile(ch_data, [10, 90])
+                    low, high = np.percentile(ch_data, [25, 75])
                     mask = (ch_data >= low) & (ch_data <= high)
                     valid = ch_data[mask]
 
@@ -323,12 +318,10 @@ class NormalizationWorker(QObject):
 
             avg_floors = get_robust_mean(floors_arr)
             avg_ceils = get_robust_mean(ceils_arr)
-            avg_casts = get_robust_mean(casts_arr)
 
             self.finished.emit(
                 tuple(map(float, avg_floors)),
                 tuple(map(float, avg_ceils)),
-                tuple(map(float, avg_casts)),
             )
 
         except Exception as e:
